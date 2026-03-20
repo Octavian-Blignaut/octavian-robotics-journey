@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SmartSentry — Alert Dashboard</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0d0d0d;
+      color: #e5e5e5;
+      padding: 2rem;
+    }
+
+    header { margin-bottom: 2rem; }
+    h1 { font-size: 1.75rem; font-weight: 700; }
+    h1 span { color: #ef4444; }
+    #status { font-size: 0.85rem; color: #6b7280; margin-top: 0.25rem; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 1rem;
+    }
+
+    .card {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 0.5rem;
+      overflow: hidden;
+      transition: border-color 0.2s;
+    }
+    .card:hover { border-color: #ef4444; }
+
+    .card img {
+      width: 100%;
+      aspect-ratio: 4/3;
+      object-fit: cover;
+      display: block;
+    }
+
+    .card-body { padding: 0.75rem 1rem; }
+    .card-body time { font-size: 0.8rem; color: #9ca3af; }
+
+    .badge {
+      display: inline-block;
+      background: #ef4444;
+      color: #fff;
+      font-size: 0.7rem;
+      padding: 0.1rem 0.45rem;
+      border-radius: 9999px;
+      margin-left: 0.4rem;
+      vertical-align: middle;
+    }
+
+    #empty { color: #6b7280; margin-top: 2rem; }
+    #error { color: #f87171; margin-top: 2rem; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Smart<span>Sentry</span> — Recent Alerts</h1>
+    <p id="status">Loading…</p>
+  </header>
+
+  <div class="grid" id="grid"></div>
+  <p id="empty" hidden>No alerts recorded yet.</p>
+  <p id="error" hidden></p>
+
+  <script>
+    // ── Configuration ─────────────────────────────────────────────────────────
+    // Update these two constants to match your deployment.
+    // The S3 bucket must have a bucket policy granting s3:GetObject and
+    // s3:ListBucket from this page's origin (or be served from the same bucket).
+    const BUCKET = "smartsentry-dev-alerts";   // ← your bucket name
+    const REGION = "us-east-1";                // ← your AWS region
+    const MAX    = 10;                         // most recent alerts to display
+
+    const BASE = `https://${BUCKET}.s3.${REGION}.amazonaws.com`;
+
+    async function loadAlerts() {
+      const statusEl = document.getElementById("status");
+      const grid     = document.getElementById("grid");
+      const emptyEl  = document.getElementById("empty");
+      const errorEl  = document.getElementById("error");
+
+      grid.innerHTML = "";
+      emptyEl.hidden = true;
+      errorEl.hidden = true;
+
+      try {
+        // S3 List Objects v2 — returns XML, sorted by key (oldest first)
+        const listUrl  = `${BASE}/?list-type=2&prefix=alerts/&max-keys=1000&delimiter=/`;
+        const resp     = await fetch(listUrl);
+        if (!resp.ok) throw new Error(`S3 List failed: ${resp.status} ${resp.statusText}`);
+
+        const xml  = new DOMParser().parseFromString(await resp.text(), "text/xml");
+        const keys = [...xml.querySelectorAll("Contents Key")]
+          .map(n => n.textContent)
+          .filter(k => k.endsWith(".jpg"))
+          .sort()
+          .reverse()   // newest first
+          .slice(0, MAX);
+
+        if (keys.length === 0) {
+          emptyEl.hidden = false;
+          statusEl.textContent = "No alerts found.";
+          return;
+        }
+
+        const count = keys.length;
+        statusEl.textContent =
+          `Showing ${count} most recent alert${count > 1 ? "s" : ""} — auto-refreshes every 60 s`;
+
+        for (const key of keys) {
+          // Key format: alerts/<unix_timestamp>-<uuid>.jpg
+          const filename  = key.split("/").pop().replace(".jpg", "");
+          const ts        = parseInt(filename.split("-")[0], 10);
+          const date      = isNaN(ts) ? new Date() : new Date(ts * 1000);
+          const imgUrl    = `${BASE}/${key}`;
+
+          const card = document.createElement("div");
+          card.className = "card";
+          card.innerHTML = `
+            <img src="${imgUrl}" alt="Alert snapshot from ${date.toLocaleString()}" loading="lazy" />
+            <div class="card-body">
+              <time datetime="${date.toISOString()}">
+                ${date.toLocaleString()}<span class="badge">Person</span>
+              </time>
+            </div>`;
+          grid.appendChild(card);
+        }
+
+      } catch (err) {
+        statusEl.textContent = "Failed to load alerts.";
+        errorEl.textContent  = err.message;
+        errorEl.hidden       = false;
+        console.error(err);
+      }
+    }
+
+    loadAlerts();
+    setInterval(loadAlerts, 60_000);
+  </script>
+</body>
+</html>
