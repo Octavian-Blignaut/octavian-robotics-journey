@@ -1,0 +1,76 @@
+name: Deploy Lambda
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "SmartSentry — AI-Powered Security Camera Bot/cloud/lambda/**"
+      - ".github/workflows/deploy_lambda.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "SmartSentry — AI-Powered Security Camera Bot/cloud/lambda/**"
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: "SmartSentry — AI-Powered Security Camera Bot/cloud/lambda"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install lint dependencies
+        run: pip install flake8 boto3
+
+      - name: Lint with flake8
+        run: flake8 alert_handler.py --max-line-length 100 --statistics
+
+  deploy:
+    name: Package & Deploy
+    runs-on: ubuntu-latest
+    needs: lint
+    # Only deploy on a direct push to main — not on pull requests
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    defaults:
+      run:
+        working-directory: "SmartSentry — AI-Powered Security Camera Bot/cloud/lambda"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Build Lambda package
+        run: |
+          pip install boto3 --target ./package
+          cp alert_handler.py ./package/
+          cd package && zip -r ../lambda_package.zip .
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ secrets.AWS_REGION }}
+
+      - name: Deploy to Lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name smartsentry-prod-alert-handler \
+            --zip-file fileb://lambda_package.zip
+
+      - name: Verify deployment
+        run: |
+          aws lambda get-function-configuration \
+            --function-name smartsentry-prod-alert-handler \
+            --query 'LastUpdateStatus' \
+            --output text
